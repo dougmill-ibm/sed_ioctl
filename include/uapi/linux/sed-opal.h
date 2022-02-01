@@ -44,10 +44,21 @@ enum opal_lock_state {
 	OPAL_LK = 0x04, /* 0100 */
 };
 
+enum opal_key_context {
+	OPAL_CURRENT = 0,	/* current/new key is needed */
+	OPAL_PREVIOUS,		/* key is changing, use previous */
+};
+
+enum opal_key_type {
+	OPAL_INCLUDED = 0,	/* key[] is the key */
+	OPAL_KEYRING,		/* key[] may be key s/n */
+};
+
 struct opal_key {
 	__u8 lr;
 	__u8 key_len;
-	__u8 __align[6];
+	__u16 key_type;
+	__u8 __align[4];
 	__u8 key[OPAL_KEY_MAX];
 };
 
