@@ -149,6 +149,11 @@ struct opal_revert_lsp {
 	__u8 __align[7];
 };
 
+struct opal_discovery {
+	__u64 data;
+	__u64 size;
+};
+
 #define IOC_OPAL_SAVE		    _IOW('p', 220, struct opal_lock_unlock)
 #define IOC_OPAL_LOCK_UNLOCK	    _IOW('p', 221, struct opal_lock_unlock)
 #define IOC_OPAL_TAKE_OWNERSHIP	    _IOW('p', 222, struct opal_key)
@@ -166,5 +171,6 @@ struct opal_revert_lsp {
 #define IOC_OPAL_WRITE_SHADOW_MBR   _IOW('p', 234, struct opal_shadow_mbr)
 #define IOC_OPAL_GENERIC_TABLE_RW   _IOW('p', 235, struct opal_read_write_table)
 #define IOC_OPAL_REVERT_LSP         _IOW('p', 236, struct opal_revert_lsp)
+#define IOC_OPAL_DISCOVERY          _IOW('p', 237, struct opal_discovery)
 
 #endif /* _UAPI_SED_OPAL_H */
