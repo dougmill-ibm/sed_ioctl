@@ -526,8 +526,11 @@ out_error:
 	return error;
 }
 
-static int opal_discovery0_end(struct opal_dev *dev)
+static int opal_discovery0_end(struct opal_dev *dev, void *data)
 {
+	struct opal_discovery *discv_out = data; /* may be NULL */
+	u8 __user *buf_out;
+	u64 len_out;
 	bool found_com_id = false, supported = true, single_user = false;
 	const struct d0_header *hdr = (struct d0_header *)dev->resp;
 	const u8 *epos = dev->resp, *cpos = dev->resp;
@@ -541,6 +544,15 @@ static int opal_discovery0_end(struct opal_dev *dev)
 		pr_debug("Discovery length overflows buffer (%zu+%u)/%u\n",
 			 sizeof(*hdr), hlen, IO_BUFFER_LENGTH);
 		return -EFAULT;
+	}
+
+	if (discv_out) {
+		buf_out = (u8 __user *)(uintptr_t)discv_out->data; /* may be NULL */
+		len_out = min(discv_out->size, (u64)hlen);
+		if (buf_out && copy_to_user(buf_out, dev->resp, len_out)) {
+			return -EFAULT;
+		}
+		discv_out->size = hlen; /* actual size of data */
 	}
 
 	epos += hlen; /* end of buffer */
@@ -617,13 +629,13 @@ static int opal_discovery0(struct opal_dev *dev, void *data)
 	if (ret)
 		return ret;
 
-	return opal_discovery0_end(dev);
+	return opal_discovery0_end(dev, data);
 }
 
 static int opal_discovery0_step(struct opal_dev *dev)
 {
 	const struct opal_step discovery0_step = {
-		opal_discovery0,
+		opal_discovery0, NULL
 	};
 
 	return execute_step(dev, &discovery0_step, 0);
@@ -2278,6 +2290,22 @@ struct opal_dev *init_opal_dev(void *data, sec_send_recv *send_recv)
 }
 EXPORT_SYMBOL(init_opal_dev);
 
+static int opal_get_discv(struct opal_dev *dev, struct opal_discovery *discv)
+{
+	const struct opal_step discovery0_step = {
+		opal_discovery0, discv
+	};
+	int ret = 0;
+
+	mutex_lock(&dev->dev_lock);
+	setup_opal_dev(dev);
+	ret = execute_step(dev, &discovery0_step, 0);
+	mutex_unlock(&dev->dev_lock);
+	if (ret)
+		return ret;
+	return discv->size; /* modified to actual length of data */
+}
+
 static int opal_secure_erase_locking_range(struct opal_dev *dev,
 					   struct opal_session_info *opal_session)
 {
@@ -2870,6 +2898,9 @@ int sed_ioctl(struct opal_dev *dev, unsigned int cmd, void __user *arg)
 		break;
 	case IOC_OPAL_REVERT_LSP:
 		ret = opal_revertlsp(dev, p);
+		break;
+	case IOC_OPAL_DISCOVERY:
+		ret = opal_get_discv(dev, p);
 		break;
 	default:
 		break;
