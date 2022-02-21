@@ -40,6 +40,7 @@ struct key_iter_ctx {
 };
 #define DEF_CUR_PEK "sed-opal-pek"
 #define DEF_OLD_PEK "sed-opal-pek-old"
+#define PKS_KEY_TYPE "pks"
 
 struct opal_step {
 	int (*fn)(struct opal_dev *dev, void *data);
@@ -2914,6 +2915,7 @@ EXPORT_SYMBOL_GPL(sed_ioctl);
 static int __init sed_opal_init(void)
 {
 	struct key *kr;
+	key_ref_t key;
 
 	kr = keyring_alloc(".sed_opal",
 		GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, current_cred(),
@@ -2924,6 +2926,18 @@ static int __init sed_opal_init(void)
 	if (IS_ERR(kr))
 		return PTR_ERR(kr);
 	opal_keyring = kr;
+
+	key = key_create_or_update(make_key_ref(opal_keyring, 0),
+			PKS_KEY_TYPE, DEF_CUR_PEK,
+			NULL, 0, KEY_USR_VIEW | KEY_USR_SEARCH | KEY_USR_WRITE, 0);
+	if (IS_ERR(key))
+		pr_debug("No default key \"%s\", error %d\n", DEF_CUR_PEK, PTR_ERR(key));
+	key = key_create_or_update(make_key_ref(opal_keyring, 0),
+			PKS_KEY_TYPE, DEF_OLD_PEK,
+			NULL, 0, KEY_USR_VIEW | KEY_USR_SEARCH | KEY_USR_WRITE, 0);
+	if (IS_ERR(key))
+		pr_debug("No default key \"%s\", error %d\n", DEF_OLD_PEK, PTR_ERR(key));
+
 	return 0;
 }
 late_initcall(sed_opal_init);
