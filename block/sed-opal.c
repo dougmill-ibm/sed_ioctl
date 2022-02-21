@@ -20,6 +20,9 @@
 #include <linux/sed-opal.h>
 #include <linux/string.h>
 #include <linux/kdev_t.h>
+#include <linux/key.h>
+#include <linux/key-type.h>
+#include <linux/assoc_array_priv.h>
 
 #include "opal_proto.h"
 
@@ -28,6 +31,15 @@
 
 /* Number of bytes needed by cmd_finalize. */
 #define CMD_FINALIZE_BYTES_NEEDED 7
+
+static struct key *opal_keyring = NULL;
+/* used to lookup PEK in opal_keyring */
+struct key_iter_ctx {
+	char *name;
+	struct key *key;
+};
+#define DEF_CUR_PEK "sed-opal-pek"
+#define DEF_OLD_PEK "sed-opal-pek-old"
 
 struct opal_step {
 	int (*fn)(struct opal_dev *dev, void *data);
@@ -266,6 +278,61 @@ static void print_buffer(const u8 *ptr, u32 length)
 #endif
 }
 
+static int keyring_iter(const void *object, void *iterator_data)
+{
+	struct key *key = (struct key *)object;
+	struct key_iter_ctx *kp = (struct key_iter_ctx *)iterator_data;
+
+	if (!refcount_inc_not_zero(&key->usage))
+		goto not_found;
+	if (!strcmp(key->description, kp->name)) {
+		kp->key = key;
+		return 1;	/* stop search */
+	}
+	key_put(key);
+not_found:
+	return 0;	/* keep looking */
+}
+
+static struct key *get_pek_default(enum opal_key_context ctx)
+{
+	struct key_iter_ctx key_ctx = { NULL, NULL };
+
+	if (!opal_keyring)
+		return ERR_PTR(-ENOKEY);
+	key_ctx.name = (ctx == OPAL_CURRENT ? DEF_CUR_PEK : DEF_OLD_PEK);
+	if (!assoc_array_iterate(&opal_keyring->keys, keyring_iter, &key_ctx))
+		return ERR_PTR(-ENOKEY);
+	return key_ctx.key;
+}
+
+static int get_pek_keyring(enum opal_key_context ctx, struct opal_key *okey)
+{
+	int ret = 0;
+	struct key *key;
+
+	if (okey->key_len == sizeof(okey->key_sn)) {
+		if (okey->key_sn)
+			key = key_lookup(okey->key_sn);
+		else
+			key = get_pek_default(ctx);
+	} else if (okey->key_len == 0)
+		key = get_pek_default(ctx);
+	else
+		return -EINVAL;
+
+	if (IS_ERR(key))
+		return PTR_ERR(key);
+
+	/* PEK was found, 'key' is valid, reference taken */
+	if (key->type->read)
+		ret = key->type->read(key, okey->key, OPAL_KEY_MAX);
+	else
+		ret = -EINVAL;
+	key_put(key);
+	return ret;
+}
+
 static int opal_get_key(struct opal_dev *dev, enum opal_key_context ctx,
 				      enum opal_user who, struct opal_key *key)
 {
@@ -276,8 +343,11 @@ static int opal_get_key(struct opal_dev *dev, enum opal_key_context ctx,
 		/* the key is ready to use */
 		break;
 	case OPAL_KEYRING:
-		/* TODO: acquire key form keyring */
-		ret = -EINVAL;
+		ret = get_pek_keyring(ctx, key);
+		if (ret > 0) {
+			key->key_len = ret;
+			key->key_type = OPAL_INCLUDED;
+		}
 		break;
 	default:
 		ret = -EINVAL;
@@ -2768,3 +2838,20 @@ int sed_ioctl(struct opal_dev *dev, unsigned int cmd, void __user *arg)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(sed_ioctl);
+
+static int __init sed_opal_init(void)
+{
+	struct key *kr;
+
+	kr = keyring_alloc(".sed_opal",
+		GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, current_cred(),
+		(KEY_POS_ALL & ~KEY_POS_SETATTR) |
+			KEY_USR_VIEW | KEY_USR_READ | KEY_USR_SEARCH | KEY_USR_WRITE,
+		KEY_ALLOC_NOT_IN_QUOTA,
+		NULL, NULL);
+	if (IS_ERR(kr))
+		return PTR_ERR(kr);
+	opal_keyring = kr;
+	return 0;
+}
+late_initcall(sed_opal_init);
